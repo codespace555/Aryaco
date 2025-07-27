@@ -2,30 +2,31 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import { format } from "date-fns";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import * as FileSystem from 'expo-file-system';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
   Animated,
   FlatList,
   Image,
-  KeyboardAvoidingView,
-  Modal,
   Platform,
   SafeAreaView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   useColorScheme,
   View,
 } from "react-native";
 import { Colors } from "../../assets/Color.js"; // Assuming this is the path to your Colors file
 
-// -- Animated Product Card Component --
-const ProductCard = ({ item, orderData, handlers, theme }) => {
+// -- Memoized and Animated OrderCard Component for Performance --
+const OrderCard = ({ item, theme }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(20)).current;
+  const styles = getStyles(theme);
 
   useEffect(() => {
     Animated.parallel([
@@ -34,277 +35,282 @@ const ProductCard = ({ item, orderData, handlers, theme }) => {
     ]).start();
   }, [fadeAnim, slideAnim]);
 
-  const { handleQuantityChange, updateQuantity, openDateModal, handleOrder, openDescriptionModal } = handlers;
-  const styles = getStyles(theme);
-
-  const quantityStr = orderData.quantity || "";
-  const quantityNum = parseInt(quantityStr || "0", 10);
-  const total = quantityNum * item.price;
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const selectedDate = orderData.date || tomorrow;
+  const statusDetails = useMemo(() => {
+    switch (item.status) {
+      case 'pending': return { text: 'Pending', color: Colors.PRIMARY };
+      case 'processing': return { text: 'Processing', color: '#3b82f6' };
+      case 'shipped': return { text: 'Shipped', color: '#8b5cf6' };
+      case 'delivered': return { text: 'Delivered', color: '#22c55e' };
+      case 'cancelled': return { text: 'Cancelled', color: '#ef4444' };
+      default: return { text: 'Unknown', color: theme.icon };
+    }
+  }, [item.status]);
 
   return (
     <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
       <View style={styles.card}>
-        <View style={styles.infoContainer}>
-          <Image source={{ uri: item.imageUrl || 'https://placehold.co/200x200/f49b33/fff?text=Product' }} style={styles.productImage} />
-          <View style={styles.textContainer}>
-            <Text style={styles.productName}>{item.name}</Text>
-            <Text style={styles.productPrice}>₹{item.price} / {item.unit}</Text>
-            <TouchableOpacity onPress={() => openDescriptionModal(item)}>
-              <Text style={styles.detailsButton}>View Details</Text>
-            </TouchableOpacity>
+        <View style={styles.cardHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.productName}>{item.productName}</Text>
+
+
+            <Text style={styles.orderDate}>
+              Ordered: {item.orderedAt ? format(item.orderedAt.toDate(), 'dd MMM yyyy, hh:mm a') : 'N/A'}
+            </Text>
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: statusDetails.color }]}>
+            <Text style={styles.statusText}>{statusDetails.text}</Text>
           </View>
         </View>
-
-        <View style={styles.controlsContainer}>
-          <View style={styles.quantityWrapper}>
-            <Text style={styles.controlLabel}>Quantity</Text>
-            <View style={styles.quantityInputContainer}>
-              <TouchableOpacity onPress={() => updateQuantity(item.id, -1)} style={styles.quantityButton}>
-                <Text style={styles.quantityButtonText}>-</Text>
-              </TouchableOpacity>
-              <TextInput
-                keyboardType="numeric" style={styles.quantityInput} value={quantityStr}
-                onChangeText={(text) => handleQuantityChange(item.id, text)}
-                placeholder="0" placeholderTextColor={theme.icon}
-              />
-              <TouchableOpacity onPress={() => updateQuantity(item.id, 1)} style={styles.quantityButton}>
-                <Text style={styles.quantityButtonText}>+</Text>
-              </TouchableOpacity>
-            </View>
+        <View style={styles.cardBody}>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Quantity:</Text>
+            <Text style={styles.detailValue}>{item.quantity} {item.unit}</Text>
           </View>
-          <View style={styles.dateWrapper}>
-            <Text style={styles.controlLabel}>Delivery Date</Text>
-            <TouchableOpacity onPress={() => openDateModal(item)} style={styles.datePickerButton}>
-              <Text style={styles.datePickerText}>{format(selectedDate, "dd MMM yyyy")}</Text>
-            </TouchableOpacity>
+          <View style={styles.detailRow}>
+            <Text style={styles.detailLabel}>Total Price:</Text>
+            <Text style={[styles.detailValue, { color: Colors.PRIMARY, fontWeight: 'bold' }]}>
+
+              ₹{(item.totalPrice || 0).toFixed(2)}
+            </Text>
+          </View>
+          <View style={[styles.detailRow, { borderBottomWidth: 0 }]}>
+            <Text style={styles.detailLabel}>Est. Delivery:</Text>
+
+            <Text style={styles.detailValue}>
+              {item.deliveryDate ? format(item.deliveryDate.toDate(), 'dd MMM yyyy') : 'N/A'}
+            </Text>
           </View>
         </View>
-
-        {quantityNum > 0 && <Text style={styles.totalText}>Order Total: ₹{total.toFixed(2)}</Text>}
-
-        <TouchableOpacity
-          style={[styles.orderButton, quantityNum > 0 ? styles.orderButtonActive : styles.orderButtonDisabled]}
-          onPress={() => handleOrder(item)} disabled={!quantityNum || quantityNum <= 0}
-        >
-          <Text style={styles.orderButtonText}>Place Order</Text>
-        </TouchableOpacity>
       </View>
     </Animated.View>
   );
 };
 
-// -- Main HomeScreen Component --
-export default function HomeScreen() {
+// -- Main MyOrdersScreen Component --
+export default function MyOrdersScreen() {
   const colorScheme = useColorScheme();
   const theme = Colors[colorScheme ?? 'light'];
   const styles = getStyles(theme);
 
-  const [products, setProducts] = useState([]);
-  const [orders, setOrders] = useState({});
-  const [searchQuery, setSearchQuery] = useState("");
-  const [isLoading, setIsLoading] = useState(true);
-
-  const [isDescModalVisible, setIsDescModalVisible] = useState(false);
-  const [selectedProduct, setSelectedProduct] = useState(null);
-
-  const [isDateModalVisible, setIsDateModalVisible] = useState(false);
-  const [editingDateForProduct, setEditingDateForProduct] = useState(null);
-  const [tempDate, setTempDate] = useState(new Date());
-
+  const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [dateFilter, setDateFilter] = useState(null);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [userData, setUserData] = useState(null);
   const userId = auth().currentUser?.uid;
 
   useEffect(() => {
-    const fetchProducts = async () => {
-      setIsLoading(true);
-      try {
-        const snapshot = await firestore().collection("products").get();
-        const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        setProducts(data);
-      } catch (err) { 
-        console.error("Error fetching products: ", err);
-        Alert.alert("Error", "Failed to load products."); 
-      }
-      finally { setIsLoading(false); }
+    if (!userId) {
+      setLoading(false);
+      return;
+    }
+
+    const fetchUserData = async () => {
+      const userDoc = await firestore().collection('users').doc(userId).get();
+      if (userDoc.exists) setUserData(userDoc.data());
     };
-    fetchProducts();
-  }, []);
+    fetchUserData();
 
-  const filteredProducts = useMemo(() => {
-    if (!searchQuery) return products;
-    return products.filter((p) => p.name.toLowerCase().includes(searchQuery.toLowerCase()));
-  }, [products, searchQuery]);
+    let query = firestore().collection('orders').where('userId', '==', userId);
 
-  const handleQuantityChange = (id, quantity) => {
-    if (quantity === "" || /^[0-9]+$/.test(quantity)) {
-      setOrders((prev) => ({ ...prev, [id]: { ...prev[id], quantity } }));
+    if (dateFilter) {
+      const startOfDay = new Date(dateFilter);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(dateFilter);
+      endOfDay.setHours(23, 59, 59, 999);
+      query = query.where('deliveryDate', '>=', startOfDay).where('deliveryDate', '<=', endOfDay);
+    } else {
+      query = query.orderBy('orderedAt', 'desc');
+    }
+
+    const subscriber = query.onSnapshot(querySnapshot => {
+      const ordersData = querySnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setOrders(ordersData);
+      setLoading(false);
+    }, error => {
+      console.error("Error fetching orders:", error);
+      if (error.code === 'firestore/failed-precondition') {
+        Alert.alert('Action Required', 'A database index is needed to filter by date. Please click the link in your terminal to create it.');
+      } else {
+        Alert.alert('Error', 'Failed to load your orders.');
+      }
+      setLoading(false);
+    });
+
+    return () => subscriber();
+  }, [userId, dateFilter]);
+
+  const onDateChange = (event, selectedDate) => {
+    setShowDatePicker(Platform.OS === 'ios');
+    if (event.type === 'set' && selectedDate) {
+      setDateFilter(selectedDate);
+    } else if (event.type !== 'set') { // Handle cancel/dismiss
+      setShowDatePicker(false);
     }
   };
 
-  const updateQuantity = (id, amount) => {
-    const currentQuantity = parseInt(orders[id]?.quantity || "0", 10);
-    const newQuantity = Math.max(0, currentQuantity + amount);
-    handleQuantityChange(id, newQuantity.toString());
+  const generateInvoiceHtml = () => {
+    const invoiceDate = format(new Date(), 'dd MMM yyyy');
+    const deliveryDate = format(dateFilter, 'dd MMM yyyy');
+
+    const grandTotal = orders.reduce((sum, order) => sum + (order.totalPrice || 0), 0).toFixed(2);
+
+    const itemsHtml = orders.map(order => `
+      <tr>
+        <td>${order.productName || 'N/A'}</td>
+        <td>${order.quantity || 0} ${order.unit || ''}</td>
+       
+        <td>₹${order.price}</td>
+        <td>₹${(order.totalPrice || 0).toFixed(2)}</td>
+      </tr>
+    `).join('');
+
+    return `
+      <html>
+        <head>
+          <style>
+            body { font-family: Arial, sans-serif; margin: 40px; color: #333; }
+            h1 { color: ${Colors.PRIMARY}; text-align: center; }
+            .header, .customer-details, .summary { margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+            .header p, .customer-details p { margin: 0; }
+            table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+            th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+            th { background-color: #f2f2f2; }
+            .total { text-align: right; font-weight: bold; }
+          </style>
+        </head>
+        <body>
+          <h1>Arya & Co</h1>
+          <div class="header">
+            <p><strong>Invoice Date:</strong> ${invoiceDate}</p>
+            <p><strong>Delivery Date:</strong> ${deliveryDate}</p>
+          </div>
+          <div class="customer-details">
+            <h3>Customer Details:</h3>
+            <p><strong>Name:</strong> ${userData?.name || 'N/A'}</p>
+            <p><strong>Phone:</strong> ${userData?.phone || 'N/A'}</p>
+            <p><strong>Address:</strong> ${userData?.address || 'N/A'}</p>
+          </div>
+          <div class="summary">
+            <h3>Order Summary:</h3>
+            <table>
+              <thead>
+                <tr>
+                  <th>Product</th>
+                  <th>Quantity</th>
+                  <th>Unit Price</th>
+                  <th>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${itemsHtml}
+              </tbody>
+            </table>
+            <p class="total">Grand Total: ₹${grandTotal}</p>
+          </div>
+        </body>
+      </html>
+    `;
   };
 
-  const openDateModal = (product) => {
-    setEditingDateForProduct(product);
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const currentDate = orders[product.id]?.date || tomorrow;
-    setTempDate(currentDate);
-    setIsDateModalVisible(true);
-  };
-
-  const confirmDateSelection = () => {
-    if (editingDateForProduct) {
-      setOrders(prev => ({
-        ...prev,
-        [editingDateForProduct.id]: { ...prev[editingDateForProduct.id], date: tempDate }
-      }));
+  const downloadInvoice = async () => {
+    if (orders.length === 0) {
+      Alert.alert("No Orders", "There are no orders for the selected date to include in the invoice.");
+      return;
     }
-    setIsDateModalVisible(false);
-    setEditingDateForProduct(null);
-  };
-
-  const handleOrder = async (product) => {
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const { quantity, date } = orders[product.id] || {};
-    if (!userId) { Alert.alert("Error", "You must be logged in to place an order."); return; }
-    if (!quantity || parseInt(quantity, 10) <= 0) { Alert.alert("Error", "Please enter a valid quantity."); return; }
+    setIsDownloading(true);
     try {
-      await firestore().collection("orders").add({
-        userId, 
-        productId: product.id, 
-        productName: product.name, 
-        price: product.price, 
-        unit: product.unit,
-        quantity: parseInt(quantity, 10), 
-        deliveryDate: firestore.Timestamp.fromDate(date || tomorrow), 
-        orderedAt: firestore.FieldValue.serverTimestamp(),
-        status: "processing", 
-        totalPrice: parseInt(quantity, 10) * product.price,
+      const html = generateInvoiceHtml();
+      const { uri } = await Print.printToFileAsync({ html });
+      const filename = `Invoice_${format(dateFilter, 'yyyy-MM-dd')}.pdf`;
+      const newUri = `${FileSystem.cacheDirectory}${filename}`;
+      await FileSystem.moveAsync({ from: uri, to: newUri });
+
+      await Sharing.shareAsync(newUri, {
+        mimeType: 'application/pdf',
+        dialogTitle: 'Download Invoice',
       });
-      Alert.alert("Success", "Order placed successfully!");
-      setOrders((prev) => ({ ...prev, [product.id]: {} }));
-    } catch (err) { 
-      console.error("Error placing order: ", err);
-      Alert.alert("Error", "Failed to place order."); 
+    } catch (error) {
+      console.error("Failed to generate PDF:", error);
+      Alert.alert("Error", "Could not generate the invoice PDF.");
+    } finally {
+      setIsDownloading(false);
     }
   };
-
-  const openDescriptionModal = (product) => {
-    setSelectedProduct(product);
-    setIsDescModalVisible(true);
-  };
-
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={{ flex: 1 }}>
-        <Text style={styles.headerTitle}>Our Products</Text>
-        <View style={styles.searchContainer}>
-          <Text style={styles.searchIcon}>🔍</Text>
-          <TextInput style={styles.searchInput} placeholder="Search for products..." placeholderTextColor={theme.icon} value={searchQuery} onChangeText={setSearchQuery} />
-        </View>
-
-        {isLoading ? (
-          <ActivityIndicator size="large" color={Colors.PRIMARY} style={{ flex: 1 }} />
-        ) : (
-          <FlatList
-            data={filteredProducts}
-            keyExtractor={(item) => item.id}
-            contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16 }}
-            renderItem={({ item }) => (
-              <ProductCard
-                item={item}
-                orderData={orders[item.id] || {}}
-                handlers={{ handleQuantityChange, updateQuantity, openDateModal, handleOrder, openDescriptionModal }}
-                theme={theme}
-              />
-            )}
-            ListEmptyComponent={<Text style={styles.emptyText}>No products found.</Text>}
-          />
+      <View style={styles.headerContainer}>
+        <Text style={styles.headerTitle}>My Orders</Text>
+      </View>
+      <View style={styles.filterBar}>
+        <TouchableOpacity style={styles.dateFilterButton} onPress={() => setShowDatePicker(true)}>
+          <Text style={styles.dateFilterText}>{dateFilter ? format(dateFilter, 'dd MMM yyyy') : 'Filter by Date'}</Text>
+        </TouchableOpacity>
+        {dateFilter && (
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity style={styles.downloadButton} onPress={downloadInvoice} disabled={isDownloading}>
+              {isDownloading ? <ActivityIndicator size="small" color={Colors.PRIMARY} /> : <Text style={styles.downloadButtonText}>PDF</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.clearFilterButton} onPress={() => setDateFilter(null)}>
+              <Text style={styles.clearFilterText}>Clear</Text>
+            </TouchableOpacity>
+          </View>
         )}
+      </View>
 
-        {/* Description Modal */}
-        <Modal animationType="fade" transparent={true} visible={isDescModalVisible} onRequestClose={() => setIsDescModalVisible(false)}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>{selectedProduct?.name}</Text>
-              <Text style={styles.modalDescription}>{selectedProduct?.description}</Text>
-              <TouchableOpacity style={styles.modalCloseButton} onPress={() => setIsDescModalVisible(false)}>
-                <Text style={styles.modalCloseButtonText}>✕</Text>
-              </TouchableOpacity>
+      {showDatePicker && <DateTimePicker value={dateFilter || new Date()} mode="date" display="default" onChange={onDateChange} />}
+
+      {loading ? (
+        <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+          <ActivityIndicator size="large" color={Colors.PRIMARY} />
+          <Text style={styles.loadingText}>Loading Orders...</Text>
+        </View>
+      ) : (
+        <FlatList
+          data={orders}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => <OrderCard item={item} theme={theme} />}
+          contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 16, paddingTop: 8 }}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Image source={{ uri: 'https://placehold.co/400x400/ffffff/cccccc?text=No+Orders' }} style={styles.emptyImage} />
+              <Text style={styles.emptyText}>{dateFilter ? "No orders found for this date." : "You haven't placed any orders yet."}</Text>
+              <Text style={styles.emptySubText}>{dateFilter ? "Try selecting another date." : "Products you order will appear here."}</Text>
             </View>
-          </View>
-        </Modal>
-
-        {/* Date Picker Modal */}
-        <Modal animationType="fade" transparent={true} visible={isDateModalVisible} onRequestClose={() => setIsDateModalVisible(false)}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Select Delivery Date</Text>
-              <DateTimePicker
-                value={tempDate}
-                mode="date"
-                display="inline"
-                minimumDate={tomorrow}
-                onChange={(event, date) => setTempDate(date || tempDate)}
-                textColor={theme.text}
-              />
-              <TouchableOpacity style={styles.confirmButton} onPress={confirmDateSelection}>
-                <Text style={styles.confirmButtonText}>Confirm</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-
-      </KeyboardAvoidingView>
+          }
+        />
+      )}
     </SafeAreaView>
   );
 }
 
 const getStyles = (theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
-  headerTitle: { fontSize: 28, fontWeight: 'bold', color: theme.text, textAlign: 'center', paddingVertical: 16 },
-  searchContainer: { backgroundColor: theme.background === '#fff' ? '#f3f4f6' : '#1f2937', flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, borderRadius: 12, marginBottom: 16, paddingHorizontal: 16, },
-  searchIcon: { fontSize: 20, marginRight: 12, color: theme.icon },
-  searchInput: { flex: 1, height: 50, color: theme.text, fontSize: 16 },
-  card: { backgroundColor: theme.background, borderRadius: 16, padding: 16, marginBottom: 16, shadowColor: "#000", shadowOffset: { width: 0, height: 2, }, shadowOpacity: 0.1, shadowRadius: 3.84, elevation: 5, borderColor: theme.background === '#fff' ? '#e5e7eb' : '#374151', borderWidth: 1, },
-  infoContainer: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16 },
-  productImage: { width: 90, height: 90, borderRadius: 12, marginRight: 16 },
-  textContainer: { flex: 1 },
-  productName: { fontSize: 20, fontWeight: 'bold', color: theme.text },
-  productPrice: { fontSize: 16, color: theme.icon, marginTop: 4 },
-  detailsButton: { color: Colors.PRIMARY, marginTop: 8, fontSize: 14, fontWeight: '600' },
-  controlsContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16, gap: 16 },
-  controlLabel: { color: theme.icon, fontSize: 14, marginBottom: 8, fontWeight: '500' },
-  quantityWrapper: { flex: 1 },
-  dateWrapper: { flex: 1 },
-  quantityInputContainer: { flexDirection: 'row', alignItems: 'center', backgroundColor: theme.background === '#fff' ? '#f9fafb' : '#374151', borderRadius: 12, height: 52, borderWidth: 1, borderColor: theme.background === '#fff' ? '#e5e7eb' : '#4b5563' },
-  quantityButton: { width: 50, height: '100%', alignItems: 'center', justifyContent: 'center', },
-  quantityButtonText: { color: theme.text, fontSize: 24, fontWeight: 'bold' },
-  quantityInput: { flex: 1, textAlign: 'center', color: theme.text, fontSize: 18, fontWeight: 'bold' },
-  datePickerButton: { backgroundColor: Colors.SECONDARY, paddingVertical: 12, borderRadius: 12, height: 52, justifyContent: 'center', alignItems: 'center', },
-  datePickerText: { color: '#fff', fontWeight: 'bold' },
-  totalText: { color: Colors.PRIMARY, fontSize: 18, fontWeight: 'bold', textAlign: 'right', marginBottom: 16 },
-  orderButton: { paddingVertical: 18, borderRadius: 12, alignItems: 'center' },
-  orderButtonActive: { backgroundColor: Colors.PRIMARY },
-  orderButtonDisabled: { backgroundColor: theme.icon },
-  orderButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' },
-  modalOverlay: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: 'rgba(0, 0, 0, 0.6)' },
-  modalContent: { backgroundColor: theme.background, borderRadius: 12, padding: 24, margin: 24, width: '90%', position: 'relative', borderColor: theme.background === '#fff' ? '#e5e7eb' : '#374151', borderWidth: 1, alignItems: 'center' },
-  modalTitle: { fontSize: 22, fontWeight: 'bold', color: theme.text, marginBottom: 16 },
-  modalDescription: { fontSize: 16, color: theme.icon, lineHeight: 24, textAlign: 'center' },
-  modalCloseButton: { position: 'absolute', top: 12, right: 12, width: 32, height: 32, borderRadius: 16, backgroundColor: theme.background === '#fff' ? '#f3f4f6' : '#374151', justifyContent: 'center', alignItems: 'center', },
-  modalCloseButtonText: { color: theme.text, fontSize: 16 },
-  confirmButton: { backgroundColor: Colors.PRIMARY, paddingVertical: 14, paddingHorizontal: 40, borderRadius: 12, marginTop: 16, },
-  confirmButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  emptyText: { textAlign: 'center', marginTop: 50, color: theme.icon, fontSize: 16 },
+  headerContainer: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.background === '#fff' ? '#f3f4f6' : '#1f2937' },
+  headerTitle: { fontSize: 24, fontWeight: 'bold', color: theme.text, textAlign: 'center' },
+  loadingText: { marginTop: 10, color: theme.icon, fontSize: 16 },
+  filterBar: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: theme.background === '#fff' ? '#f3f4f6' : '#1f2937' },
+  dateFilterButton: { backgroundColor: theme.background === '#fff' ? '#f3f4f6' : '#1f2937', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8 },
+  dateFilterText: { color: theme.text, fontWeight: '600' },
+  downloadButton: { backgroundColor: theme.background, paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, borderWidth: 1, borderColor: Colors.PRIMARY, marginRight: 10 },
+  downloadButtonText: { color: Colors.PRIMARY, fontWeight: 'bold' },
+  clearFilterButton: { paddingHorizontal: 12, paddingVertical: 10 },
+  clearFilterText: { color: theme.icon, fontWeight: 'bold' },
+  card: { backgroundColor: theme.background, borderRadius: 16, marginBottom: 16, shadowColor: "#000", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 5, elevation: 4, borderColor: theme.background === '#fff' ? '#e5e7eb' : '#374151', borderWidth: 1 },
+  cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', padding: 16, borderBottomWidth: 1, borderBottomColor: theme.background === '#fff' ? '#f3f4f6' : '#1f2937' },
+  productName: { fontSize: 18, fontWeight: 'bold', color: theme.text, marginBottom: 4 },
+  orderDate: { fontSize: 12, color: theme.icon },
+  statusBadge: { borderRadius: 20, paddingVertical: 6, paddingHorizontal: 12 },
+  statusText: { color: '#fff', fontSize: 12, fontWeight: 'bold', textTransform: 'capitalize' },
+  cardBody: { paddingHorizontal: 16, paddingVertical: 8 },
+  detailRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8 },
+  detailLabel: { fontSize: 14, color: theme.icon },
+  detailValue: { fontSize: 14, fontWeight: '600', color: theme.text },
+  emptyContainer: { flex: 1, paddingTop: 80, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
+  emptyImage: { width: 150, height: 150, marginBottom: 24, opacity: 0.6 },
+  emptyText: { fontSize: 18, fontWeight: 'bold', color: theme.text, textAlign: 'center' },
+  emptySubText: { fontSize: 14, color: theme.icon, textAlign: 'center', marginTop: 8 }
 });

@@ -1,7 +1,7 @@
-import auth from '@react-native-firebase/auth';
-import firestore from '@react-native-firebase/firestore';
+import { getAuth, onAuthStateChanged, signInWithPhoneNumber } from '@react-native-firebase/auth';
+import { doc, getDoc, getFirestore } from '@react-native-firebase/firestore';
 import { useRouter } from 'expo-router';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -26,16 +26,53 @@ export default function Index() {
   const theme = Colors[colorScheme ?? 'light'];
   const router = useRouter();
 
-  // State management
+
   const [phoneNumber, setPhoneNumber] = useState('');
-  // For native SDK, we store the confirmation result object, not just an ID
   const [confirmation, setConfirmation] = useState(null);
   const [otpCode, setOtpCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false); // New state for the listener
+  const auth = getAuth();
+  const firestore = getFirestore();
+
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (user) {
+        try {
+          const userDocRef = doc(firestore, 'users', user.uid);
+          const userDocSnap = await getDoc(userDocRef);
+
+          if (userDocSnap.exists()) {
+            const userData = userDocSnap.data();
+            if (userData.role === 'admin') {
+              router.replace('/dashboard');
+            } else {
+              router.replace('/home');
+            }
+          } else {
+            router.replace({
+              pathname: '/signup',
+              params: {
+                uid: user.uid,
+                phoneNumber: user.phoneNumber,
+              },
+            });
+          }
+        } catch (err) {
+          Alert.alert('Error', 'User verification failed. Try again.', err);
+        }
+      }
+
+      setIsVerifying(false);
+    });
+
+    return unsubscribe;
+  }, []); // The empty dependency array ensures this runs only once on mount
 
   /**
-   * Sends a verification code to the user's phone number using the native SDK.
+   * Sends a verification code to the user's phone number.
    */
   const sendVerification = async () => {
     if (phoneNumber.length !== 10) {
@@ -46,8 +83,8 @@ export default function Index() {
     setError('');
     try {
       const fullPhoneNumber = `+91${phoneNumber}`;
-      const confirmationResult = await auth().signInWithPhoneNumber(fullPhoneNumber);
-      setConfirmation(confirmationResult); // Move to OTP screen
+      const confirmationResult = await signInWithPhoneNumber(auth, fullPhoneNumber);
+      setConfirmation(confirmationResult);
     } catch (err) {
       setError(`Error: ${err.message}`);
       Alert.alert("Verification Error", err.message);
@@ -57,8 +94,7 @@ export default function Index() {
   };
 
   /**
-   * Confirms the OTP code and signs the user in using the native SDK.
-   * After sign-in, it checks for a user profile in Firestore and navigates accordingly.
+   * Confirms the OTP code. Navigation is now handled by the onAuthStateChanged listener.
    */
   const confirmCode = async () => {
     if (otpCode.length !== 6) {
@@ -68,39 +104,24 @@ export default function Index() {
     setIsLoading(true);
     setError('');
     try {
-      // The confirmation object has a 'confirm' method
+      // This will trigger the onAuthStateChanged listener upon success.
       await confirmation.confirm(otpCode);
-
-      // After confirmation, the user is signed in.
-      const user = auth().currentUser;
-
-      if (!user) {
-        throw new Error("User authentication failed after confirmation.");
-      }
-
-      const userDocRef = firestore().collection('users').doc(user.uid);
-      const userDoc = await userDocRef.get();
-
-      if (userDoc.exists) {
-        const userData = userDoc.data();
-        if (userData.role === 'admin') {
-          router.replace('/dashboard');
-        } else {
-          router.replace('/home');
-        }
-      } else {
-        router.replace({
-          pathname: '/signup',
-          params: { uid: user.uid, phoneNumber: user.phoneNumber }
-        });
-      }
     } catch (err) {
       setError(`Error: ${err.message}`);
       Alert.alert("Confirmation Error", "The code you entered was incorrect. Please try again.");
-    } finally {
-      setIsLoading(false);
+      setIsLoading(false); // Only stop loading if there's an error here
     }
   };
+
+  // Show a full-screen loader while the auth state is being checked.
+  if (isVerifying) {
+    return (
+      <SafeAreaView style={{ flex: 1, backgroundColor: theme.background, justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color={Colors.PRIMARY} />
+        <Text style={{ color: theme.text, marginTop: 10 }}>Verifying...</Text>
+      </SafeAreaView>
+    );
+  }
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: theme.background }}>
@@ -108,7 +129,6 @@ export default function Index() {
         barStyle={colorScheme === 'dark' ? 'light-content' : 'dark-content'}
         backgroundColor={theme.background}
       />
-      {/* FirebaseRecaptchaVerifierModal is NOT needed for @react-native-firebase */}
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
         style={{ flex: 1 }}
@@ -117,7 +137,7 @@ export default function Index() {
           <View style={{ paddingHorizontal: 24, paddingBottom: 32 }}>
             <Image
               source={logo}
-              style={{ width: '100%', height: 256, alignSelf: 'center', marginBottom: 32 }}
+              style={{ width: 256, height: 256, alignSelf: 'center', marginBottom: 32, backgroundColor: theme.logo, borderRadius: 128 }}
               resizeMode="contain"
             />
             <Text style={{ fontSize: 28, fontWeight: 'bold', textAlign: 'center', color: theme.text, marginBottom: 8 }}>

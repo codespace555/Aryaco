@@ -2,7 +2,7 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import auth from '@react-native-firebase/auth';
 import firestore from '@react-native-firebase/firestore';
 import { format } from "date-fns";
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -25,18 +25,17 @@ import { Colors } from "../../assets/Color.js"; // Assuming this is the path to 
 // -- Animated Product Card Component --
 const ProductCard = ({ item, orderData, handlers, theme }) => {
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(20)).current;
+  const slideAnim = useRef(new Animated.Value(30)).current;
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
+      Animated.timing(fadeAnim, { toValue: 1, duration: 400, useNativeDriver: true }),
+      Animated.timing(slideAnim, { toValue: 0, duration: 400, useNativeDriver: true }),
     ]).start();
   }, [fadeAnim, slideAnim]);
 
   const { handleQuantityChange, updateQuantity, openDateModal, handleOrder, openDescriptionModal } = handlers;
   const styles = getStyles(theme);
-
   const quantityStr = orderData.quantity || "";
   const quantityNum = parseInt(quantityStr || "0", 10);
   const total = quantityNum * item.price;
@@ -117,20 +116,28 @@ export default function HomeScreen() {
   const userId = auth().currentUser?.uid;
 
   useEffect(() => {
-    const fetchProducts = async () => {
-      setIsLoading(true);
-      try {
-        const snapshot = await firestore().collection("products").get();
-        const data = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-        setProducts(data);
-      } catch (err) { 
-        console.error("Error fetching products: ", err);
-        Alert.alert("Error", "Failed to load products."); 
-      }
-      finally { setIsLoading(false); }
-    };
-    fetchProducts();
+    const subscriber = firestore()
+      .collection('products')
+      .onSnapshot(querySnapshot => {
+        const productsData = [];
+        querySnapshot.forEach(documentSnapshot => {
+          productsData.push({
+            id: documentSnapshot.id,
+            ...documentSnapshot.data(),
+          });
+        });
+        setProducts(productsData);
+        setIsLoading(false);
+      }, error => {
+        console.error("Error fetching products: ", error);
+        Alert.alert("Error", "Failed to load products.");
+        setIsLoading(false);
+      });
+
+    // Unsubscribe from events when no longer in use
+    return () => subscriber();
   }, []);
+
 
   const filteredProducts = useMemo(() => {
     if (!searchQuery) return products;
@@ -158,6 +165,25 @@ export default function HomeScreen() {
     setIsDateModalVisible(true);
   };
 
+  const onDateChange = (event, selectedDate) => {
+    const currentDate = selectedDate || tempDate;
+    // For Android, the picker is dismissed automatically.
+    // We check for the 'set' event type to confirm a date was chosen.
+    if (Platform.OS === 'android') {
+      setIsDateModalVisible(false);
+      if (event.type === 'set' && editingDateForProduct) {
+        setOrders(prev => ({
+          ...prev,
+          [editingDateForProduct.id]: { ...prev[editingDateForProduct.id], date: currentDate }
+        }));
+        setEditingDateForProduct(null);
+      }
+    } else {
+      // For iOS, we just update the temporary date. The user will press "Confirm".
+      setTempDate(currentDate);
+    }
+  };
+
   const confirmDateSelection = () => {
     if (editingDateForProduct) {
       setOrders(prev => ({
@@ -177,22 +203,22 @@ export default function HomeScreen() {
     if (!quantity || parseInt(quantity, 10) <= 0) { Alert.alert("Error", "Please enter a valid quantity."); return; }
     try {
       await firestore().collection("orders").add({
-        userId, 
-        productId: product.id, 
-        productName: product.name, 
-        price: product.price, 
+        userId,
+        productId: product.id,
+        productName: product.name,
+        price: product.price,
         unit: product.unit,
-        quantity: parseInt(quantity, 10), 
-        deliveryDate: firestore.Timestamp.fromDate(date || tomorrow), 
+        quantity: parseInt(quantity, 10),
+        deliveryDate: firestore.Timestamp.fromDate(date || tomorrow),
         orderedAt: firestore.FieldValue.serverTimestamp(),
-        status: "processing", 
+        status: "processing",
         totalPrice: parseInt(quantity, 10) * product.price,
       });
       Alert.alert("Success", "Order placed successfully!");
       setOrders((prev) => ({ ...prev, [product.id]: {} }));
-    } catch (err) { 
+    } catch (err) {
       console.error("Error placing order: ", err);
-      Alert.alert("Error", "Failed to place order."); 
+      Alert.alert("Error", "Failed to place order.");
     }
   };
 
@@ -245,25 +271,37 @@ export default function HomeScreen() {
           </View>
         </Modal>
 
-        {/* Date Picker Modal */}
-        <Modal animationType="fade" transparent={true} visible={isDateModalVisible} onRequestClose={() => setIsDateModalVisible(false)}>
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <Text style={styles.modalTitle}>Select Delivery Date</Text>
-              <DateTimePicker
-                value={tempDate}
-                mode="date"
-                display="inline"
-                minimumDate={tomorrow}
-                onChange={(event, date) => setTempDate(date || tempDate)}
-                textColor={theme.text}
-              />
-              <TouchableOpacity style={styles.confirmButton} onPress={confirmDateSelection}>
-                <Text style={styles.confirmButtonText}>Confirm</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
+        {/* Date Picker - Platform specific handling */}
+        {isDateModalVisible && (
+          Platform.OS === 'ios' ? (
+            <Modal animationType="slide" transparent={true} visible={isDateModalVisible} onRequestClose={confirmDateSelection}>
+              <View style={styles.modalOverlay}>
+                <View style={styles.modalContent}>
+                  <Text style={styles.modalTitle}>Select Delivery Date</Text>
+                  <DateTimePicker
+                    value={tempDate}
+                    mode="date"
+                    display="inline"
+                    minimumDate={tomorrow}
+                    onChange={onDateChange}
+                    textColor={theme.text}
+                  />
+                  <TouchableOpacity style={styles.confirmButton} onPress={confirmDateSelection}>
+                    <Text style={styles.confirmButtonText}>Confirm</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </Modal>
+          ) : (
+            <DateTimePicker
+              value={tempDate}
+              mode="date"
+              display="default"
+              minimumDate={tomorrow}
+              onChange={onDateChange}
+            />
+          )
+        )}
 
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -272,12 +310,12 @@ export default function HomeScreen() {
 
 const getStyles = (theme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.background },
-  headerTitle: { fontSize: 28, fontWeight: 'bold', color: theme.text, textAlign: 'center', paddingVertical: 16 },
-  searchContainer: { backgroundColor: theme.background === '#fff' ? '#f3f4f6' : '#1f2937', flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, borderRadius: 12, marginBottom: 16, paddingHorizontal: 16, },
+  headerTitle: { fontSize: 28, fontWeight: 'bold', color: theme.text, textAlign: 'center', paddingVertical: 16, borderBottomWidth: 1, borderBottomColor: theme.background === '#fff' ? '#f3f4f6' : '#1f2937' },
+  searchContainer: { backgroundColor: theme.background === '#fff' ? '#f3f4f6' : '#1f2937', flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, borderRadius: 12, marginTop: 16, marginBottom: 8, paddingHorizontal: 16, },
   searchIcon: { fontSize: 20, marginRight: 12, color: theme.icon },
   searchInput: { flex: 1, height: 50, color: theme.text, fontSize: 16 },
   card: { backgroundColor: theme.background, borderRadius: 16, padding: 16, marginBottom: 16, shadowColor: "#000", shadowOffset: { width: 0, height: 2, }, shadowOpacity: 0.1, shadowRadius: 3.84, elevation: 5, borderColor: theme.background === '#fff' ? '#e5e7eb' : '#374151', borderWidth: 1, },
-  infoContainer: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 16 },
+  infoContainer: { flexDirection: 'row', alignItems: 'center', marginBottom: 16 },
   productImage: { width: 90, height: 90, borderRadius: 12, marginRight: 16 },
   textContainer: { flex: 1 },
   productName: { fontSize: 20, fontWeight: 'bold', color: theme.text },
