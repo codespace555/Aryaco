@@ -212,6 +212,7 @@ export default function HomeScreen() {
         deliveryDate: firestore.Timestamp.fromDate(date || tomorrow),
         orderedAt: firestore.FieldValue.serverTimestamp(),
         status: "processing",
+        payment: "Unpaid",
         totalPrice: parseInt(quantity, 10) * product.price,
       });
       Alert.alert("Success", "Order placed successfully!");

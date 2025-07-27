@@ -46,6 +46,12 @@ const OrderCard = ({ item, theme }) => {
     }
   }, [item.status]);
 
+  const paymentStatusDetails = useMemo(() => {
+    return item.payment === 'paid'
+      ? { text: 'Paid', color: '#22c55e' }
+      : { text: 'Unpaid', color: '#ef4444' };
+  }, [item.payment]);
+
   return (
     <Animated.View style={{ opacity: fadeAnim, transform: [{ translateY: slideAnim }] }}>
       <View style={styles.card}>
@@ -61,6 +67,7 @@ const OrderCard = ({ item, theme }) => {
           <View style={[styles.statusBadge, { backgroundColor: statusDetails.color }]}>
             <Text style={styles.statusText}>{statusDetails.text}</Text>
           </View>
+
         </View>
         <View style={styles.cardBody}>
           <View style={styles.detailRow}>
@@ -81,7 +88,18 @@ const OrderCard = ({ item, theme }) => {
               {item.deliveryDate ? format(item.deliveryDate.toDate(), 'dd MMM yyyy') : 'N/A'}
             </Text>
           </View>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <View
+              style={[
+                styles.statuspayment,
+                { backgroundColor: paymentStatusDetails.color }
+              ]}
+            />
+          </View>
+
         </View>
+
       </View>
     </Animated.View>
   );
@@ -312,5 +330,13 @@ const getStyles = (theme) => StyleSheet.create({
   emptyContainer: { flex: 1, paddingTop: 80, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
   emptyImage: { width: 150, height: 150, marginBottom: 24, opacity: 0.6 },
   emptyText: { fontSize: 18, fontWeight: 'bold', color: theme.text, textAlign: 'center' },
-  emptySubText: { fontSize: 14, color: theme.icon, textAlign: 'center', marginTop: 8 }
+  emptySubText: { fontSize: 14, color: theme.icon, textAlign: 'center', marginTop: 8 },
+  statuspayment: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: 'red',
+    marginRight: 6,
+    
+  },
 });

@@ -1,21 +1,21 @@
 {
   "project_info": {
-    "project_number": "909361181696",
-    "project_id": "arya-73391",
-    "storage_bucket": "arya-73391.firebasestorage.app"
+    "project_number": "234944889990",
+    "project_id": "aryaco-4da11",
+    "storage_bucket": "aryaco-4da11.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:909361181696:android:f4dc5e947b42d05d5d94e5",
+        "mobilesdk_app_id": "1:234944889990:android:2b47a21e2282b30a86bd07",
         "android_client_info": {
-          "package_name": "com.arya"
+          "package_name": "com.priyadarshi.aryaco"
         }
       },
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyAvD-qwF7yXqaaX5dcZ9wsZFSTB0JS5aIY"
+          "current_key": "AIzaSyD9l4nmKwgHXgMj_G9jnZ9gHd8Ihsv90HE"
         }
       ],
       "services": {
